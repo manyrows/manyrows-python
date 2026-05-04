@@ -1,7 +1,7 @@
 """Bearer-token verification for server-side auth.
 
 Mirrors the Go SDK's ``auth.Middleware`` pattern: validate the user's JWT
-against the ManyRows ``/a/app/me`` endpoint, then return the authenticated
+against the ManyRows ``/a/me`` endpoint, then return the authenticated
 user ID.
 """
 
@@ -14,7 +14,7 @@ _USER_AGENT = "manyrows-python-auth/1.0"
 
 def _me_url(base_url: str, workspace_slug: str, app_id: str) -> str:
     base = base_url.rstrip("/")
-    return f"{base}/x/{workspace_slug}/apps/{app_id}/a/app/me"
+    return f"{base}/x/{workspace_slug}/apps/{app_id}/a/me"
 
 
 def verify_token(
@@ -25,7 +25,7 @@ def verify_token(
     app_id: str,
     http_client: httpx.Client | None = None,
 ) -> str | None:
-    """Verify a user's bearer token by calling the ManyRows ``/a/app/me`` endpoint.
+    """Verify a user's bearer token by calling the ManyRows ``/a/me`` endpoint.
 
     Returns the user ID on success.
     Returns ``None`` if the token is empty or rejected by ManyRows (401/403).

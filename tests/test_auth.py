@@ -96,7 +96,7 @@ class TestVerifyTokenSync:
             )
         assert (
             str(captured[0].url)
-            == "https://app.manyrows.com/x/acme/apps/app_123/a/app/me"
+            == "https://app.manyrows.com/x/acme/apps/app_123/a/me"
         )
 
 
