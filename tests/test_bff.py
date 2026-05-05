@@ -14,6 +14,7 @@ from manyrows import (
     ClientContext,
     OAuthCallbackHtml,
     PublicProxy,
+    dispatch_oauth_callback,
 )
 from manyrows.bff import _append_query
 
@@ -372,3 +373,128 @@ class TestAppendQuery:
     def test_url_encodes_value(self) -> None:
         # quote(safe='') uses %20 for spaces (RFC 3986).
         assert _append_query("/x", "a", "hello world") == "/x?a=hello%20world"
+
+
+# ===== dispatch_oauth_callback =====
+
+
+REDIRECT = "https://yourapp.com/auth/oauth/callback"
+SUCCESS = "/"
+ERR = "/login?failed=1"
+TOTP = "/login/totp"
+
+
+class TestDispatchOAuthCallback:
+    def test_error_branch_short_circuits(self) -> None:
+        transport, captured = make_transport([])  # no upstream call expected
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"error": "provider_exchange_failed"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+        )
+        assert out.kind == "error"
+        assert out.error == "provider_exchange_failed"
+        assert "provider_exchange_failed" in out.html
+        assert captured == []
+
+    def test_challenge_required_short_circuits(self) -> None:
+        transport, captured = make_transport([])
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"challengeRequired": "1", "challengeToken": "ct_abc", "state": "s"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+            totp_redirect=TOTP,
+        )
+        assert out.kind == "totp"
+        assert out.challenge_token == "ct_abc"
+        assert '"totpRequired":true' in out.html
+        assert "/login/totp?challengeToken=ct_abc" in out.html
+        assert captured == []
+
+    def test_missing_code_when_query_empty(self) -> None:
+        transport, _ = make_transport([])
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+        )
+        assert out.kind == "error"
+        assert out.error == "missing_code"
+
+    def test_success_returns_session_and_html(self) -> None:
+        transport, _ = make_transport(
+            [
+                {
+                    "json": {
+                        "sessionId": "sess_123",
+                        "userId": "u_42",
+                        "expiresAt": "2030-01-01T00:00:00Z",
+                    }
+                }
+            ]
+        )
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"code": "abc123", "state": "s"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+        )
+        assert out.kind == "success"
+        assert out.session is not None
+        assert out.session.session_id == "sess_123"
+        assert '"userId":"u_42"' in out.html
+
+    def test_post_exchange_totp_required(self) -> None:
+        transport, _ = make_transport(
+            [{"json": {"totpRequired": True, "challengeToken": "ct_xyz"}}]
+        )
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"code": "abc123"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+            totp_redirect=TOTP,
+        )
+        assert out.kind == "totp"
+        assert out.challenge_token == "ct_xyz"
+
+    def test_exchange_error_surfaces_upstream_code(self) -> None:
+        transport, _ = make_transport(
+            [{"status": 401, "json": {"error": "exchange_token_invalid"}}]
+        )
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"code": "abc123"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+        )
+        assert out.kind == "error"
+        assert out.error == "exchange_token_invalid"
+
+    def test_exchange_error_falls_back_when_body_isnt_json(self) -> None:
+        transport, _ = make_transport([{"status": 500, "text": "not json"}])
+        bff = _new_bff(transport)
+        out = dispatch_oauth_callback(
+            query={"code": "abc123"},
+            bff=bff,
+            redirect_uri=REDIRECT,
+            success_redirect=SUCCESS,
+            error_redirect=ERR,
+        )
+        assert out.kind == "error"
+        assert out.error == "exchange_failed"

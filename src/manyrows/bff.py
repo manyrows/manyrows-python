@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
@@ -922,6 +923,155 @@ class OAuthCallbackHtml:
             else None
         )
         return _render(400, payload, redirect)
+
+
+# ===========================================================================
+# dispatch_oauth_callback — full /auth/oauth/callback handler logic
+# ===========================================================================
+
+
+@dataclass
+class OAuthCallbackOutcome:
+    """Discriminated outcome of :func:`dispatch_oauth_callback`.
+
+    The customer's handler writes ``html`` to the response and, for the
+    ``"success"`` branch, issues a cookie carrying ``session.session_id``
+    before sending the body. The ``"totp"`` and ``"error"`` branches
+    are cookie-less by design.
+    """
+
+    kind: str  # "success" | "totp" | "error"
+    html: str
+    session: BffSession | None = None
+    challenge_token: str | None = None
+    error: str | None = None
+
+
+def _dispatch_pre_exchange(
+    query: Mapping[str, str],
+    redirect_uri_unused: str,
+    success_redirect_unused: str,
+    error_redirect: str,
+    totp_redirect: str,
+) -> OAuthCallbackOutcome | None:
+    """Returns an outcome for the pre-exchange branches (error / challenge / missing_code).
+
+    Returns None when the query is well-formed enough that the caller
+    should proceed to exchange the auth code.
+    """
+    err_code = (query.get("error") or "").strip()
+    if err_code:
+        return OAuthCallbackOutcome(
+            kind="error",
+            error=err_code,
+            html=OAuthCallbackHtml.error(err_code, error_redirect),
+        )
+    if query.get("challengeRequired") == "1":
+        ct = (query.get("challengeToken") or "").strip()
+        return OAuthCallbackOutcome(
+            kind="totp",
+            challenge_token=ct,
+            html=OAuthCallbackHtml.totp(ct, totp_redirect, error_redirect),
+        )
+    if not (query.get("code") or "").strip():
+        return OAuthCallbackOutcome(
+            kind="error",
+            error="missing_code",
+            html=OAuthCallbackHtml.error("missing_code", error_redirect),
+        )
+    return None
+
+
+def _exchange_error_outcome(e: BffError, error_redirect: str) -> OAuthCallbackOutcome:
+    err = "exchange_failed"
+    body = e.body or ""
+    if body:
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict) and parsed.get("error"):
+                err = str(parsed["error"])
+        except (ValueError, TypeError):
+            pass
+    return OAuthCallbackOutcome(
+        kind="error", error=err, html=OAuthCallbackHtml.error(err, error_redirect)
+    )
+
+
+def _post_exchange_outcome(
+    session: BffSession, success_redirect: str, error_redirect: str, totp_redirect: str
+) -> OAuthCallbackOutcome:
+    if session.totp_required:
+        ct = session.challenge_token or ""
+        return OAuthCallbackOutcome(
+            kind="totp",
+            challenge_token=ct,
+            html=OAuthCallbackHtml.totp(ct, totp_redirect, error_redirect),
+        )
+    return OAuthCallbackOutcome(
+        kind="success",
+        session=session,
+        html=OAuthCallbackHtml.success(
+            session.user_id, bool(session.totp_setup_required), success_redirect
+        ),
+    )
+
+
+def dispatch_oauth_callback(
+    *,
+    query: Mapping[str, str],
+    bff: BffClient,
+    redirect_uri: str,
+    success_redirect: str,
+    error_redirect: str,
+    totp_redirect: str = "",
+    ctx: ClientContext | None = None,
+) -> OAuthCallbackOutcome:
+    """Single entry point for ``/auth/oauth/callback`` (sync).
+
+    Mirrors the manyrows-go ``Handlers.OAuthCallback``: parses the query
+    (error / challengeRequired / code), exchanges the auth code via
+    :meth:`BffClient.exchange_auth_code` when present, and returns the
+    popup-aware HTML the customer should write to the response — plus
+    the parsed session on success so the customer's framework can
+    issue its own cookie.
+
+    The async variant is :func:`dispatch_oauth_callback_async`.
+    """
+    pre = _dispatch_pre_exchange(
+        query, redirect_uri, success_redirect, error_redirect, totp_redirect
+    )
+    if pre is not None:
+        return pre
+    code = query["code"].strip()
+    try:
+        session = bff.exchange_auth_code(code, redirect_uri, ctx)
+    except BffError as e:
+        return _exchange_error_outcome(e, error_redirect)
+    return _post_exchange_outcome(session, success_redirect, error_redirect, totp_redirect)
+
+
+async def dispatch_oauth_callback_async(
+    *,
+    query: Mapping[str, str],
+    bff: AsyncBffClient,
+    redirect_uri: str,
+    success_redirect: str,
+    error_redirect: str,
+    totp_redirect: str = "",
+    ctx: ClientContext | None = None,
+) -> OAuthCallbackOutcome:
+    """Async variant of :func:`dispatch_oauth_callback`."""
+    pre = _dispatch_pre_exchange(
+        query, redirect_uri, success_redirect, error_redirect, totp_redirect
+    )
+    if pre is not None:
+        return pre
+    code = query["code"].strip()
+    try:
+        session = await bff.exchange_auth_code(code, redirect_uri, ctx)
+    except BffError as e:
+        return _exchange_error_outcome(e, error_redirect)
+    return _post_exchange_outcome(session, success_redirect, error_redirect, totp_redirect)
 
 
 def _render(status: int, payload: dict[str, Any], redirect_url: str | None) -> str:

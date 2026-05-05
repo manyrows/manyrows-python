@@ -9,8 +9,11 @@ from manyrows.bff import (
     BffSession,
     ClientContext,
     OAuthCallbackHtml,
+    OAuthCallbackOutcome,
     ProxyResponse,
     PublicProxy,
+    dispatch_oauth_callback,
+    dispatch_oauth_callback_async,
 )
 from manyrows.client import (
     AsyncClient,
@@ -48,6 +51,7 @@ __all__ = [
     "Member",
     "MembersResult",
     "OAuthCallbackHtml",
+    "OAuthCallbackOutcome",
     "PermissionResult",
     "ProxyResponse",
     "PublicProxy",
@@ -56,6 +60,8 @@ __all__ = [
     "UserFieldValue",
     "UserResult",
     "bearer_token",
+    "dispatch_oauth_callback",
+    "dispatch_oauth_callback_async",
     "verify_token",
     "verify_token_async",
 ]

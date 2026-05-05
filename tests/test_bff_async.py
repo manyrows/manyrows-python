@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from manyrows import AsyncBffClient, AsyncPublicProxy, BffError, ClientContext
+from manyrows.bff import dispatch_oauth_callback_async
 
 from .conftest import make_transport
 
@@ -163,3 +164,48 @@ class TestAsyncPublicProxy:
             + "?openerOrigin=http%3A%2F%2Flocalhost"
         )
         assert req.method == "POST"
+
+
+class TestAsyncDispatchOAuthCallback:
+    @pytest.mark.asyncio
+    async def test_short_circuits_challenge_required(self) -> None:
+        transport, captured = make_transport([])
+        async with _new_async_bff(transport) as bff:
+            out = await dispatch_oauth_callback_async(
+                query={"challengeRequired": "1", "challengeToken": "ct_async"},
+                bff=bff,
+                redirect_uri="https://yourapp.com/auth/oauth/callback",
+                success_redirect="/",
+                error_redirect="/login?failed=1",
+                totp_redirect="/login/totp",
+            )
+        assert out.kind == "totp"
+        assert out.challenge_token == "ct_async"
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_success_path_invokes_async_exchange(self) -> None:
+        transport, captured = make_transport(
+            [
+                {
+                    "json": {
+                        "sessionId": "sess_async",
+                        "userId": "u_async",
+                        "expiresAt": "2030-01-01T00:00:00Z",
+                    }
+                }
+            ]
+        )
+        async with _new_async_bff(transport) as bff:
+            out = await dispatch_oauth_callback_async(
+                query={"code": "abc"},
+                bff=bff,
+                redirect_uri="https://yourapp.com/auth/oauth/callback",
+                success_redirect="/",
+                error_redirect="/login?failed=1",
+            )
+        assert out.kind == "success"
+        assert out.session is not None
+        assert out.session.session_id == "sess_async"
+        assert len(captured) == 1
+        assert str(captured[0].url) == BASE + "/bff/exchange"
