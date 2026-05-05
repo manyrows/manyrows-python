@@ -32,6 +32,7 @@ from manyrows.client import (
     UserFieldValue,
     UserResult,
 )
+from manyrows.secrets import SecretsError, compute_public_jwk_fingerprint, decrypt_secret
 from manyrows.webhook import WebhookError, verify_webhook
 
 __all__ = [
@@ -56,12 +57,15 @@ __all__ = [
     "PermissionResult",
     "ProxyResponse",
     "PublicProxy",
+    "SecretsError",
     "User",
     "UserField",
     "UserFieldValue",
     "UserResult",
     "WebhookError",
     "bearer_token",
+    "compute_public_jwk_fingerprint",
+    "decrypt_secret",
     "dispatch_oauth_callback",
     "dispatch_oauth_callback_async",
     "verify_token",

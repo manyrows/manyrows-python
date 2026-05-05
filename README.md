@@ -47,6 +47,38 @@ delivery = client.get_delivery()
 # delivery.flags.client, delivery.flags.server
 ```
 
+### Decrypt secrets
+
+Secret values are returned as encrypted envelopes. Decrypt them with
+your workspace private key (downloaded once when you generated the
+workspace key in the admin UI):
+
+```python
+import json, os
+from manyrows import decrypt_secret
+
+private_key_jwk = json.loads(os.environ["MANYROWS_WORKSPACE_PRIVATE_KEY"])
+delivery = client.get_delivery()
+
+for sec in delivery.config.secrets:
+    if not sec.is_set or not sec.envelope:
+        continue
+    plaintext = decrypt_secret(sec.envelope, private_key_jwk)
+    # plaintext is bytes of the JSON-encoded value. For a string secret
+    # you'll get b'"hello"' (with quotes) — json.loads to recover.
+    value = json.loads(plaintext.decode("utf-8"))
+```
+
+The private key never leaves your server — secrets are decrypted in
+process. Requires the optional `cryptography` dep:
+
+```bash
+pip install 'manyrows[secrets]'
+```
+
+See `src/manyrows/secrets.py` for the full algorithm (ECDH P-256 +
+HKDF-SHA256 + AES-256-GCM).
+
 ### Check permission
 
 ```python

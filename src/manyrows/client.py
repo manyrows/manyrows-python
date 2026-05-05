@@ -33,6 +33,11 @@ class ConfigItem:
     type: str
     value: Any = None
     is_set: bool | None = None
+    # For ``secrets`` only: the encrypted envelope, as returned by the
+    # server-API delivery endpoint. Pass to ``manyrows.secrets.decrypt_secret``
+    # along with your workspace private JWK to recover the plaintext.
+    # Only set when ``is_set`` is True.
+    envelope: dict[str, Any] | None = None
 
 
 @dataclass
@@ -154,6 +159,7 @@ def _parse_config_item(d: dict[str, Any]) -> ConfigItem:
         type=d["type"],
         value=d.get("value"),
         is_set=d.get("isSet"),
+        envelope=d.get("envelope"),
     )
 
 

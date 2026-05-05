@@ -31,11 +31,13 @@ Repository = "https://github.com/manyrows/manyrows-python"
 Issues = "https://github.com/manyrows/manyrows-python/issues"
 
 [project.optional-dependencies]
+secrets = ["cryptography>=41"]
 dev = [
   "pytest>=7",
   "pytest-asyncio>=0.21",
   "ruff>=0.1",
   "mypy>=1.0",
+  "cryptography>=41",
 ]
 
 [tool.hatch.build.targets.wheel]
