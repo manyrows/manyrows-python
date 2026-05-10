@@ -135,29 +135,31 @@ except ManyRowsError as err:
 
 ## Auth helpers
 
-Validate bearer tokens from your end users by calling the ManyRows `/a/me` endpoint, then read the user ID.
+Verify the user's JWT **locally** against your install's JWKS. Fetches `${base_url}/.well-known/jwks.json` once on first verify, caches the parsed keys in-process, refetches on a kid mismatch. No per-request round trip to ManyRows. Use `bearer_token` to pull the JWT from the `Authorization` header and `mr_at_cookie` to fall back to the cookie that AppKit sets in cookie mode.
+
+Built on [`PyJWT[crypto]`](https://github.com/jpadilla/pyjwt) — the de-facto Python JWT library.
 
 ### `verify_token`
 
-Returns the user ID on success, `None` if rejected, raises `httpx.HTTPStatusError` on network/server errors:
+Returns the user ID (`sub` claim) on success, `None` for any verification failure (expired, malformed, wrong signature, missing `sub`, JWKS unreachable). Doesn't raise on auth-decision-equivalent conditions — fail-closed is the caller's job; `None` is the "not authenticated" signal.
 
 ```python
-from manyrows import bearer_token, verify_token
+from manyrows import bearer_token, mr_at_cookie, verify_token
 
-token = bearer_token(request.headers.get("Authorization"))
+# Try Authorization header first, then mr_at cookie (cookie-mode AppKit).
+token = (
+    bearer_token(request.headers.get("Authorization"))
+    or mr_at_cookie(request.headers.get("Cookie"))
+)
 if not token:
     return Response("Unauthorized", status=401)
 
-try:
-    user_id = verify_token(
-        token,
-        base_url="https://app.manyrows.com",
-        workspace_slug="your-workspace",
-        app_id="your-app-id",
-    )
-except Exception:
-    return Response("Unauthorized", status=401)  # fail closed on network errors
-
+user_id = verify_token(
+    token,
+    base_url="https://app.manyrows.com",
+    workspace_slug="your-workspace",
+    app_id="your-app-id",
+)
 if user_id is None:
     return Response("Unauthorized", status=401)
 ```
@@ -181,23 +183,23 @@ user_id = await verify_token_async(
 from typing import Annotated
 from fastapi import Depends, FastAPI, Header, HTTPException
 
-from manyrows import bearer_token, verify_token_async
+from manyrows import bearer_token, mr_at_cookie, verify_token_async
 
 app = FastAPI()
 
-async def manyrows_user_id(authorization: Annotated[str | None, Header()] = None) -> str:
-    token = bearer_token(authorization)
+async def manyrows_user_id(
+    authorization: Annotated[str | None, Header()] = None,
+    cookie: Annotated[str | None, Header()] = None,
+) -> str:
+    token = bearer_token(authorization) or mr_at_cookie(cookie)
     if not token:
         raise HTTPException(401)
-    try:
-        user_id = await verify_token_async(
-            token,
-            base_url="https://app.manyrows.com",
-            workspace_slug="your-workspace",
-            app_id="your-app-id",
-        )
-    except Exception as exc:
-        raise HTTPException(401) from exc
+    user_id = await verify_token_async(
+        token,
+        base_url="https://app.manyrows.com",
+        workspace_slug="your-workspace",
+        app_id="your-app-id",
+    )
     if user_id is None:
         raise HTTPException(401)
     return user_id
@@ -213,25 +215,25 @@ async def profile(user_id: Annotated[str, Depends(manyrows_user_id)]):
 from functools import wraps
 from flask import Flask, request, abort, g
 
-from manyrows import bearer_token, verify_token
+from manyrows import bearer_token, mr_at_cookie, verify_token
 
 app = Flask(__name__)
 
 def manyrows_auth(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        token = bearer_token(request.headers.get("Authorization"))
+        token = (
+            bearer_token(request.headers.get("Authorization"))
+            or mr_at_cookie(request.headers.get("Cookie"))
+        )
         if not token:
             abort(401)
-        try:
-            user_id = verify_token(
-                token,
-                base_url="https://app.manyrows.com",
-                workspace_slug="your-workspace",
-                app_id="your-app-id",
-            )
-        except Exception:
-            abort(401)
+        user_id = verify_token(
+            token,
+            base_url="https://app.manyrows.com",
+            workspace_slug="your-workspace",
+            app_id="your-app-id",
+        )
         if user_id is None:
             abort(401)
         g.manyrows_user_id = user_id
