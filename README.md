@@ -2,10 +2,29 @@
 
 Official Python SDK for [ManyRows](https://manyrows.com). Mirrors the surface of [`manyrows-go`](https://github.com/manyrows/manyrows-go) and [`@manyrows/manyrows-node`](https://www.npmjs.com/package/@manyrows/manyrows-node).
 
+The examples below assume a self-hosted deployment at
+`https://manyrows.example.com`. Swap in whatever host your install
+runs on (`http://localhost:3000` for local development, your own
+domain in production).
+
 ## Install
 
+This SDK is **not yet on PyPI**. Install directly from GitHub:
+
 ```bash
-pip install manyrows
+pip install git+https://github.com/manyrows/manyrows-python.git
+```
+
+To pin to a specific commit or tag:
+
+```bash
+pip install git+https://github.com/manyrows/manyrows-python.git@<commit-or-tag>
+```
+
+If you need to decrypt secrets (see below), pull the optional extra:
+
+```bash
+pip install 'manyrows[secrets] @ git+https://github.com/manyrows/manyrows-python.git'
 ```
 
 Requires **Python 3.9+**. Sync and async clients are both included; both use [`httpx`](https://www.python-httpx.org/) under the hood.
@@ -18,7 +37,7 @@ The client wraps the ManyRows Server API. Requires an API key.
 from manyrows import Client
 
 client = Client(
-    base_url="https://app.manyrows.com",
+    base_url="https://manyrows.example.com",
     workspace_slug="your-workspace",
     app_id="your-app-id",
     api_key="mr_a1b2c3d4_yourSecretKey",
@@ -31,7 +50,7 @@ For async code:
 from manyrows import AsyncClient
 
 async with AsyncClient(
-    base_url="https://app.manyrows.com",
+    base_url="https://manyrows.example.com",
     workspace_slug="your-workspace",
     app_id="your-app-id",
     api_key="mr_...",
@@ -51,7 +70,7 @@ delivery = client.get_delivery()
 
 Secret values are returned as encrypted envelopes. Decrypt them with
 your workspace private key (downloaded once when you generated the
-workspace key in the admin UI):
+workspace key in your install's admin UI):
 
 ```python
 import json, os
@@ -70,11 +89,8 @@ for sec in delivery.config.secrets:
 ```
 
 The private key never leaves your server — secrets are decrypted in
-process. Requires the optional `cryptography` dep:
-
-```bash
-pip install 'manyrows[secrets]'
-```
+process. Requires the optional `cryptography` dep — pull the
+`[secrets]` extra when installing (see the Install section above).
 
 See `src/manyrows/secrets.py` for the full algorithm (ECDH P-256 +
 HKDF-SHA256 + AES-256-GCM).
@@ -156,7 +172,7 @@ if not token:
 
 user_id = verify_token(
     token,
-    base_url="https://app.manyrows.com",
+    base_url="https://manyrows.example.com",
     workspace_slug="your-workspace",
     app_id="your-app-id",
 )
@@ -171,7 +187,7 @@ from manyrows import verify_token_async
 
 user_id = await verify_token_async(
     token,
-    base_url="https://app.manyrows.com",
+    base_url="https://manyrows.example.com",
     workspace_slug="your-workspace",
     app_id="your-app-id",
 )
@@ -196,7 +212,7 @@ async def manyrows_user_id(
         raise HTTPException(401)
     user_id = await verify_token_async(
         token,
-        base_url="https://app.manyrows.com",
+        base_url="https://manyrows.example.com",
         workspace_slug="your-workspace",
         app_id="your-app-id",
     )
@@ -230,7 +246,7 @@ def manyrows_auth(f):
             abort(401)
         user_id = verify_token(
             token,
-            base_url="https://app.manyrows.com",
+            base_url="https://manyrows.example.com",
             workspace_slug="your-workspace",
             app_id="your-app-id",
         )
@@ -256,7 +272,7 @@ from manyrows import Client
 
 http = httpx.Client(timeout=30.0, headers={"X-Trace-Id": "abc"})
 client = Client(
-    base_url="https://app.manyrows.com",
+    base_url="https://manyrows.example.com",
     workspace_slug="your-workspace",
     app_id="your-app-id",
     api_key="mr_...",
