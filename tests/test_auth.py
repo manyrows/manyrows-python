@@ -47,9 +47,10 @@ def _generate_keypair():
     return private_key, jwk, kid
 
 
-def _sign(private_key, kid: str, *, sub: str = "user_xyz", **claims) -> str:
+def _sign(private_key, kid: str, *, sub: str = "user_xyz", aud: str = "app_123", **claims) -> str:
     payload = {
         "sub": sub,
+        "aud": aud,
         "iat": int(time.time()),
         "exp": int(time.time()) + 300,
         **claims,
@@ -113,24 +114,30 @@ class TestBearerToken:
 
 
 class TestMrAtCookie:
-    def test_extracts_mr_at_value(self):
-        assert mr_at_cookie("mr_at=abc123") == "abc123"
+    APP_ID = "app_123"
+    COOKIE_NAME = "mr_at_app_123"
+
+    def test_extracts_per_app_value(self):
+        assert mr_at_cookie(f"{self.COOKIE_NAME}=abc123", self.APP_ID) == "abc123"
 
     def test_ignores_other_cookies_and_whitespace(self):
-        assert mr_at_cookie("foo=1; mr_at=abc; bar=2") == "abc"
-        assert mr_at_cookie("  mr_at=abc  ") == "abc"
+        assert mr_at_cookie(f"foo=1; {self.COOKIE_NAME}=abc; bar=2", self.APP_ID) == "abc"
+        assert mr_at_cookie(f"  {self.COOKIE_NAME}=abc  ", self.APP_ID) == "abc"
 
     def test_handles_values_containing_eq(self):
-        assert mr_at_cookie("mr_at=eyJ.payload=xyz") == "eyJ.payload=xyz"
+        assert mr_at_cookie(f"{self.COOKIE_NAME}=eyJ.payload=xyz", self.APP_ID) == "eyJ.payload=xyz"
+
+    def test_ignores_a_different_apps_cookie(self):
+        assert mr_at_cookie("mr_at_app_other=abc", self.APP_ID) is None
 
     def test_returns_none_when_absent_or_empty(self):
-        assert mr_at_cookie(None) is None
-        assert mr_at_cookie("") is None
-        assert mr_at_cookie("foo=1; bar=2") is None
-        assert mr_at_cookie("mr_at=") is None
+        assert mr_at_cookie(None, self.APP_ID) is None
+        assert mr_at_cookie("", self.APP_ID) is None
+        assert mr_at_cookie("foo=1; bar=2", self.APP_ID) is None
+        assert mr_at_cookie(f"{self.COOKIE_NAME}=", self.APP_ID) is None
 
     def test_joins_lists_into_one_cookie_string(self):
-        assert mr_at_cookie(["foo=1", "mr_at=abc"]) == "abc"
+        assert mr_at_cookie(["foo=1", f"{self.COOKIE_NAME}=abc"], self.APP_ID) == "abc"
 
 
 # =====================================================================
@@ -190,8 +197,18 @@ class TestVerifyTokenSync:
 
     def test_returns_none_when_sub_missing(self):
         priv, jwk, kid = _generate_keypair()
-        payload = {"iat": int(time.time()), "exp": int(time.time()) + 300}
+        payload = {"aud": "app_123", "iat": int(time.time()), "exp": int(time.time()) + 300}
         tok = jwt.encode(payload, priv, algorithm="ES256", headers={"kid": kid})
+        with httpx.Client(transport=_jwks_transport({"keys": [jwk]})) as http:
+            assert verify_token(tok, **VERIFY_OPTS, http_client=http) is None
+
+    def test_rejects_token_minted_for_different_app(self):
+        # Cross-app cookie ride-along: a token with aud=app_other must
+        # not authenticate a request landing on the middleware configured
+        # for app_123. Catches sibling-subdomain cookie reuse between two
+        # ManyRows apps on the same eTLD.
+        priv, jwk, kid = _generate_keypair()
+        tok = _sign(priv, kid, aud="app_other")
         with httpx.Client(transport=_jwks_transport({"keys": [jwk]})) as http:
             assert verify_token(tok, **VERIFY_OPTS, http_client=http) is None
 

@@ -21,10 +21,15 @@ from jwt.algorithms import ECAlgorithm
 
 _USER_AGENT = "manyrows-python-auth/1.0"
 
-# Mirrors manyrows-core's clientauth.AccessCookieName(). Duplicated here
-# rather than imported because manyrows-python doesn't depend on the
-# core repo. Keep in sync if the server-side name ever changes.
-_ACCESS_COOKIE_NAME = "mr_at"
+# Cookie name is per-app — "mr_at_<app_id>" — so two ManyRows apps on
+# the same eTLD don't share one cookie slot in the browser jar.
+# Mirrors manyrows-core's clientauth.AccessCookieName(appID). Keep in
+# sync if the server-side naming ever changes.
+_ACCESS_COOKIE_PREFIX = "mr_at_"
+
+
+def _access_cookie_name(app_id: str) -> str:
+    return _ACCESS_COOKIE_PREFIX + app_id
 
 # JWKS cache parameters. ``_TTL`` is how long a fetched JWKS is trusted
 # before a refetch on the next miss; ``_COOLDOWN`` rate-limits refetches
@@ -165,14 +170,18 @@ async def _resolve_key_async(
     return keys.get(kid)
 
 
-def _verify_with_key(token: str, key: Any) -> str | None:
+def _verify_with_key(token: str, key: Any, app_id: str) -> str | None:
     try:
+        # `audience=app_id` enforces that the token's aud claim contains
+        # this app's ID — PyJWT accepts both string and list[str] shapes
+        # per RFC 7519. Catches the cross-app cookie ride-along between
+        # two ManyRows apps on the same eTLD.
         payload = jwt.decode(
             token,
             key,
             algorithms=["ES256"],
             leeway=60,
-            options={"verify_aud": False},
+            audience=app_id,
         )
     except jwt.PyJWTError:
         return None
@@ -197,12 +206,13 @@ def verify_token(
     fails signature verification — caller should treat as "not
     authenticated" and 401 the request.
 
-    ``workspace_slug`` and ``app_id`` are accepted for source-compat
-    with the previous ``/a/me``-based API and forward-compat (e.g. a
-    future audience check); the local-verify path doesn't currently
-    use them.
+    The token's ``aud`` claim must contain ``app_id`` — a token minted
+    for a different app on the same install is rejected (catches the
+    cross-app cookie ride-along between sibling subdomains).
+    ``workspace_slug`` is currently unused; kept on the signature for
+    forward-compat (e.g. a future per-workspace check).
     """
-    _ = workspace_slug, app_id
+    _ = workspace_slug
     if not token:
         return None
     try:
@@ -215,7 +225,7 @@ def verify_token(
     key = _resolve_key_sync(base_url, kid, http_client)
     if key is None:
         return None
-    return _verify_with_key(token, key)
+    return _verify_with_key(token, key, app_id)
 
 
 async def verify_token_async(
@@ -227,7 +237,7 @@ async def verify_token_async(
     http_client: httpx.AsyncClient | None = None,
 ) -> str | None:
     """Async equivalent of :func:`verify_token`. Same JWKS cache."""
-    _ = workspace_slug, app_id
+    _ = workspace_slug
     if not token:
         return None
     try:
@@ -240,7 +250,7 @@ async def verify_token_async(
     key = await _resolve_key_async(base_url, kid, http_client)
     if key is None:
         return None
-    return _verify_with_key(token, key)
+    return _verify_with_key(token, key, app_id)
 
 
 def bearer_token(header_value: str | list[str] | None) -> str | None:
@@ -269,16 +279,21 @@ def bearer_token(header_value: str | list[str] | None) -> str | None:
     return tok if tok else None
 
 
-def mr_at_cookie(cookie_header_value: str | list[str] | None) -> str | None:
-    """Extract the ``mr_at`` session cookie from a Cookie header value.
+def mr_at_cookie(
+    cookie_header_value: str | list[str] | None,
+    app_id: str,
+) -> str | None:
+    """Extract the ``mr_at_<app_id>`` session cookie from a Cookie header.
 
     Used as a fallback when the SDK is in cookie mode and no
-    Authorization header is present. Returns ``None`` when absent,
-    empty, or malformed. Accepts a list (joined into one cookie
-    string) for compatibility with frameworks that surface duplicate
-    headers.
+    Authorization header is present. The cookie name is per-app so
+    two ManyRows apps on the same eTLD don't collide — pass the
+    configured ``app_id`` to read the right one. Returns ``None``
+    when absent, empty, or malformed. Accepts a list (joined into one
+    cookie string) for compatibility with frameworks that surface
+    duplicate headers.
     """
-    if cookie_header_value is None:
+    if cookie_header_value is None or not app_id:
         return None
     if isinstance(cookie_header_value, list):
         if not cookie_header_value:
@@ -286,12 +301,13 @@ def mr_at_cookie(cookie_header_value: str | list[str] | None) -> str | None:
         cookie_header_value = "; ".join(cookie_header_value)
     if not isinstance(cookie_header_value, str):
         return None
+    target = _access_cookie_name(app_id)
     for raw in cookie_header_value.split(";"):
         eq = raw.find("=")
         if eq < 0:
             continue
         name = raw[:eq].strip()
-        if name != _ACCESS_COOKIE_NAME:
+        if name != target:
             continue
         value = raw[eq + 1 :].strip()
         return value if value else None
